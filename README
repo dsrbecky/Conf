@@ -1,0 +1,63 @@
+== Overview ==
+
+The document consists of comments, strings, objects and key-value pairs.
+
+ - Comments start with the "#" character and continue until the end of line.
+ 
+ - Strings can be quoted or unqouted.  Both single and double quotes can be used
+   for quoting and backslash is the escape character.  Unquoted strings can
+   contain any characters except '"{}=;,#\n\r .
+   
+ - Objects are denoted by curly brackets.  The content of the object has the
+   exactly same syntax as the document.  This implies that it can contain
+   other nested objects.  The syntax also allows objects to represent arrays
+   or directories.  Objects can be named or annonymous.
+ 
+ - Key-value pairs conist of key (string), equals sign and a value (string or
+   object).
+   
+== Example ==
+
+# This is a comment
+Title = Example file
+Names = { David; Daniel; Matt; Siegfried; Martin }
+Font = { Name = Courier; Size = 12; Bold = true }
+Brush = LinearGradientBrush {
+  StartPoint = Point { X = 0, Y = 0 }
+  EndPoint = Point { X = 1, Y = 0 }
+  GradientStop { Color="Yellow" Offset="0.0" }
+  GradientStop { Color=Red; Offset=1.0 }
+}
+XmlElement { Attribute = Value; Content... }
+
+== EBNF ==
+
+ (1) Content ::= (WhiteSpace | Comment | String | Object | KeyValuePair | ';'| ',')*
+ (2) WhiteSpace ::= (' ' | '\t' | '\r' | '\n')+
+ (3) Comment ::= '#' .* ('\r\n' | '\r' | '\n')
+ (4) String ::= Char [(Char | ' ' | '\t')* Char] | QuotedString
+ (5) Object ::= [String [WhiteSpace]] '{' Content '}'
+ (6) KeyValuePair ::= String [WhiteSpace] '=' [WhiteSpace] (String | Object)
+ (7) Char ::= . - ("'" | '"' | '{' | '}' | '=' | ';' | ',' | '#' | '\r' | '\n' | ' ' | '\t')
+ (8) QuotedString ::= "'" ("\\'" | "''" | . - "'")* "'" | '"' ('\\"' | '""' | . - '"')* '"'
+
+  "Name { }" is named object, not string followed by annonymous object.
+
+== Resolution of quoted strings ==
+
+
+
+== Discussion ==
+
+ Design goals:
+   - As expressive as XML, but less verbose
+   - Reusing concepts from current formats (ie. familiar/intuitive to use)
+   - Minimalistic
+   - Very easy to write a parser
+ 
+ Name
+   Concise Object Notation Format?
+   
+ TODO:
+   "abc"123
+ 
