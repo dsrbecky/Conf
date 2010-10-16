@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -9,51 +9,63 @@ using System.Text;
 
 namespace Conf
 {
+	public class Node
+	{
+		public string     Value    { get; set; }
+		public List<Node> Children { get; set; }
+	}
+
 	/// <summary>
-	///
+	/// 
 	/// </summary>
 	/// <remarks>
 	///  Syntax:
-	///   (1) Arguments ::= WS? (Comment | Argument) (WS (Comment | Argument))* WS? | WS?
-	///   (2) Comment   ::= '#' [^\r\n]*
-	///   (3) WS        ::= (' ' | '\t' | '\r' | '\n')+
-	///   (4) String    ::= [^\r\n\t #'"{}=]+ | ("'" [^']* "'") | ('"' [^"]* '"')
-	///   (5) Argument  ::= [String WS? '=' WS?] String? [WS? '{' Arguments '}']
+	///    Comment  ::= '#' [^\r\n]*
+	///    WS       ::= (' ' | '\t' | '\r' | '\n')+
+	///    String   ::= [^\r\n\t #'"{}=]+ | ("'" [^']* "'") | ('"' [^"]* '"')
+	///    Node     ::= String [WS? '{' Children '}' | WS? '=' WS? Node]
+	///    Children ::= WS? (Comment | Node) (WS (Comment | Node))* WS? | WS?
 	/// </remarks>
 	public class Parser
 	{
 		string input;
 		int curr;
-		int length;
+		int end;
 
-		Parser(string input)
+		Parser(string input, int start, int count)
 		{
-			this.input  = input;
-			this.curr   = 0;
-			this.length = input.Length;
+			this.input = input;
+			this.curr = start;
+			this.end = start + count;
 		}
 
-		public static List<Argument> Parse(string text)
+		public static List<Node> Parse(string text)
 		{
-			return new Parser(text).ReadArguments(false);
+			return new Parser(text, 0, text.Length).ReadChildren(false);
 		}
 
-		public static List<Argument> ParseCommandLine()
+		public static List<Node> Parse(string text, int start, int count)
 		{
-			Parser parser = new Parser(Environment.CommandLine);
+			return new Parser(text, start, count).ReadChildren(false);
+		}
+
+		public static List<Node> ParseCommandLine()
+		{
+			string commandLine = Environment.CommandLine;
+			Parser parser = new Parser(commandLine, 0, commandLine.Length);
 			string arg0;
-			parser.ReadString(out arg0); // Skip the name of the executable
-			return parser.ReadArguments(false);
+			parser.TryReadString(out arg0); // Skip the name of the executable
+			return parser.ReadChildren(false);
 		}
 
-		List<Argument> ReadArguments(bool nested)
+		List<Node> ReadChildren(bool nested)
 		{
-			List<Argument> args = new List<Argument>();
+			List<Node> children = new List<Node>();
 
-			ReadWhiteSpace();
+			TryReadWhiteSpace();
 
-			while (curr < length) {
-				// End of nested argument list
+			while (curr < end) {
+				// End of nested children
 				if (input[curr] == '}') {
 					if (nested) {
 						break;
@@ -63,106 +75,68 @@ namespace Conf
 				}
 
 				// Try to parse a comment
-				if (ReadComment()) {
-					ReadWhiteSpace();
+				if (TryReadComment()) {
+					TryReadWhiteSpace();
 				} else {
-					// If it is not a comment, then it must be an argument
-					Argument arg = new Argument();
+					// If it is not a comment, it must be a node
+					bool followedByWhiteSpace;
+					children.Add(ReadNode(out followedByWhiteSpace));
 
-					// Consider this a primitive stack of the last seen but unprocessed tokens
-					string str;
-					bool haveString;
-					bool haveWhiteSpace;
-
-					// Try to push string and whitespace on our mini parsing stack
-					haveString = ReadString(out str);
-					haveWhiteSpace = haveString ? ReadWhiteSpace() : false;
-
-					// Set the name
-					if (haveString && curr < length && input[curr] == '=') {
-						// Pop the string and whitespace from the stack
-						arg.Name = str;
-						haveString = haveWhiteSpace = false;
-						curr++; // '='
-						ReadWhiteSpace();
-						// Repopulate the empty stack
-						haveString = ReadString(out str);
-						haveWhiteSpace = haveString ? ReadWhiteSpace() : false;
-					} else {
-						arg.Name = string.Empty;
-					}
-
-					bool valueSet = false;
-
-					// Set the value
-					if (haveString) {
-						// Pop string from stack
-						arg.Value = str;
-						haveString = false;
-						valueSet = true;
-					} else {
-						arg.Value = string.Empty;
-					}
-
-					// Set the value's arguments
-					if (curr < length && input[curr] == '{') {
-						Debug.Assert(!haveString);
-						haveWhiteSpace = false; // Pop whitespace from stack
-						curr++; // '{'
-						arg.ValueArguments = ReadArguments(true);
-						if (curr == length || input[curr] != '}')
-							throw new ParseException(curr, curr, "'}' Expected");
-						curr++; // '}'
-						valueSet = true;
-					} else {
-						arg.ValueArguments = null;
-					}
-
-					// At least string or argument must be present
-					if (!valueSet)
-						throw new ParseException(curr, curr, "String value or argument list expected");
-
-					// Argument was successfully read
-					Debug.Assert(!haveString);
-					args.Add(arg);
-
-					// The argument has to be followed by whitespace or end of file or '}'
-					if (!haveWhiteSpace)
-						haveWhiteSpace = ReadWhiteSpace();
-					if (!haveWhiteSpace && curr < length && input[curr] != '}') {
-						// Try to produce nice error message
-						char c = input[curr];
-						if (arg.ValueArguments == null && (c == '#' || c == '\'' || c == '"'))
-							throw new ParseException(curr, curr, "The character " + c + " is not allowed in string");
-						throw new ParseException(curr, curr, "Argument has to be followed by whitespace");
+					// The node has to be followed by whitespace or end of file or '}'
+					if (!followedByWhiteSpace && curr < end && input[curr] != '}') {
+						throw new ParseException(curr, curr, "Node has to be followed by whitespace");
 					}
 				}
 			}
-
-			return args;
+			return children;
 		}
 
-		bool ReadWhiteSpace()
+		Node ReadNode(out bool followedByWhiteSpace)
+		{
+			string value;
+			if (!TryReadString(out value))
+				throw new ParseException(curr, curr, "String value expected");
+
+			Node node = new Node();
+			node.Value = value;
+			followedByWhiteSpace = TryReadWhiteSpace();
+			if (curr < end && input[curr] == '=') {
+				curr++; // '='
+				TryReadWhiteSpace();
+				node.Children = new List<Node>(1);
+				node.Children.Add(ReadNode(out followedByWhiteSpace));
+			} else if (curr < end && input[curr] == '{') {
+				curr++; // '{'
+				node.Children = ReadChildren(true);
+				if (curr == end || input[curr] != '}')
+					throw new ParseException(curr, curr, "'}' Expected");
+				curr++; // '}'
+				followedByWhiteSpace = TryReadWhiteSpace();
+			}
+			return node;
+		}
+
+		bool TryReadWhiteSpace()
 		{
 			int start = curr;
-			while (curr < length && ((input[curr] <= ' ') && (input[curr] == ' ' || input[curr] == '\t' || input[curr] == '\r' || input[curr] == '\n'))) curr++;
+			while (curr < end && ((input[curr] <= ' ') && (input[curr] == ' ' || input[curr] == '\t' || input[curr] == '\r' || input[curr] == '\n'))) curr++;
 			return curr > start;
 		}
 
-		bool ReadComment()
+		bool TryReadComment()
 		{
-			if (curr < length && input[curr] == '#') {
+			if (curr < end && input[curr] == '#') {
 				curr++; // '#'
-				while (curr < length && input[curr] != '\r' && input[curr] != '\n') curr++;
+				while (curr < end && input[curr] != '\r' && input[curr] != '\n') curr++;
 				return true;
 			} else {
 				return false;
 			}
 		}
 
-		bool ReadString(out string str)
+		bool TryReadString(out string str)
 		{
-			if (curr == length) {
+			if (curr == end) {
 				str = string.Empty;
 				return false;
 			}
@@ -173,14 +147,14 @@ namespace Conf
 				// Quoted string
 				curr++;
 				int endQuote;
-				if (curr == length || (endQuote = input.IndexOf(first, curr)) == -1)
-					throw new ParseException(start, length, "Closing quote is missing");
+				if (curr == end || (endQuote = input.IndexOf(first, curr)) == -1)
+					throw new ParseException(start, end, "Closing quote is missing");
 				curr = endQuote + 1;
 				str = ReslveReferences(start + 1, endQuote);
 				return true;
 			} else {
 				// Unquoted string
-				while (curr < length) {
+				while (curr < end) {
 					char c = input[curr];
 					if (('A' <= c && c <= 'z') || ('0' <= c && c <= '9') || c > 0x80) {
 						curr++; // Quick pass test for the most common characters
@@ -217,13 +191,17 @@ namespace Conf
 						throw new ParseException(amp, end, "';' is missing after '&'");
 					string refName = input.Substring(amp + 1, semicolon - amp - 1);
 					switch (refName) {
-						case "":     throw new ParseException(amp, amp + 2, "Empty reference");
+						case "": throw new ParseException(amp, amp + 2, "Empty reference");
 						case "amp":  sb.Append('&'); break;
 						case "apos": sb.Append('\''); break;
 						case "quot": sb.Append('\"'); break;
 						case "lt":   sb.Append('<'); break;
 						case "gt":   sb.Append('>'); break;
+						case "lb":   sb.Append('{'); break;
+						case "rb":   sb.Append('}'); break;
+						case "eq":   sb.Append('='); break;
 						case "br":   sb.Append('\n'); break;
+						case "cr":   sb.Append('\r'); break;
 						case "tab":  sb.Append('\t'); break;
 						case "nbsp": sb.Append((char)0xA0); break;
 						default:
@@ -267,11 +245,64 @@ namespace Conf
 		}
 	}
 
-	public class Argument
+	public class PrettyPrinter
 	{
-		public string Name { get; set; }
-		public string Value { get; set; }
-		public List<Argument> ValueArguments { get; set; }
+		StringBuilder sb;
+		int depth = 0;
+
+		public string Print(IEnumerable<Node> nodes)
+		{
+			sb = new StringBuilder();
+			Append(nodes);
+			return sb.ToString();
+		}
+
+		void Append(IEnumerable<Node> nodes)
+		{
+			foreach (Node node in nodes) {
+				// Delimiter
+				if (sb.Length > 0) {
+					sb.Append("\n");
+					sb.Append(' ', depth * 2);
+				}
+				// The value
+				Append(node.Value);
+				// Children
+				if (node.Children != null && node.Children.Count > 0) {
+					if (node.Children.Count == 1 && (node.Children[0].Children == null || node.Children[0].Children.Count == 0)) {
+						sb.Append(" =");
+						Append(node.Children[0].Value);
+					} else {
+						sb.Append(" {");
+						depth++;
+						Append(node.Children);
+						depth--;
+						sb.Append("\n");
+						sb.Append(' ', depth * 2);
+						sb.Append("}");
+					}
+				}
+			}
+		}
+
+		void Append(string val)
+		{
+			if (string.IsNullOrEmpty(val)) {
+				sb.Append("\"\"");
+			} else if (val.IndexOfAny(new char[] { '\r', '\n', '\t', ' ', '#', '\'', '"', '{', '}', '=' }) == -1) {
+				sb.Append(val);
+			} else {
+				if (val.Contains('"') && !val.Contains('\'')) {
+					sb.Append('\'');
+					sb.Append(val);
+					sb.Append('\'');
+				} else {
+					sb.Append('\"');
+					sb.Append(val.Replace("\"", "&quot;"));
+					sb.Append('\"');
+				}
+			}
+		}
 	}
 
 	public static class Deserializer
@@ -290,18 +321,17 @@ namespace Conf
 			Deserialize(Parser.ParseCommandLine(), default(T));
 		}
 
-		public static void Deserialize<T>(List<Argument> from, T to)
+		public static void Deserialize<T>(List<Node> from, T to)
 		{
-			foreach (Argument arg in from) {
-				FieldInfo field = typeof(T).GetField(arg.Name, BindingFlags.Public | BindingFlags.Static);
+			foreach (Node node in from) {
+				FieldInfo field = typeof(T).GetField(node.Value, BindingFlags.Public | BindingFlags.Static);
 				if (field != null) {
 					if (field.FieldType == typeof(TimeSpan)) {
 						TimeSpan val;
-						TimeSpan.TryParse(arg.Value, out val);
+						TimeSpan.TryParse(node.Children[0].Value, out val);
 						field.SetValue(null, val);
-					}
-					else {
-						object val = Convert.ChangeType(arg.Value, field.FieldType);
+					} else {
+						object val = Convert.ChangeType(node.Children[0].Value, field.FieldType);
 						field.SetValue(null, val);
 					}
 				}
