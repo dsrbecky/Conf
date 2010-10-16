@@ -1,63 +1,147 @@
-== Overview ==
+Conf - simple data-centric alternative to XML suitable for configuration files
 
-The document consists of comments, strings, objects and key-value pairs.
+=== Introduction ===
 
- - Comments start with the "#" character and continue until the end of line.
- 
- - Strings can be quoted or unqouted.  Both single and double quotes can be used
-   for quoting and backslash is the escape character.  Unquoted strings can
-   contain any characters except '"{}=;,#\n\r .
-   
- - Objects are denoted by curly brackets.  The content of the object has the
-   exactly same syntax as the document.  This implies that it can contain
-   other nested objects.  The syntax also allows objects to represent arrays
-   or directories.  Objects can be named or annonymous.
- 
- - Key-value pairs conist of key (string), equals sign and a value (string or
-   object).
-   
-== Example ==
+Conf file consists of list of arguments separated by whitespace.  Arguments may 
+have name and value.  The value may have nested list of arguments.  The basic
+syntax is:
 
-# This is a comment
-Title = Example file
-Names = { David; Daniel; Matt; Siegfried; Martin }
-Font = { Name = Courier; Size = 12; Bold = true }
-Brush = LinearGradientBrush {
-  StartPoint = Point { X = 0, Y = 0 }
-  EndPoint = Point { X = 1, Y = 0 }
-  GradientStop { Color="Yellow" Offset="0.0" }
-  GradientStop { Color=Red; Offset=1.0 }
+	Name1 = Value1 { Value1Arguments }  Name2 = Value2 { Value2Arguments }
+
+All three parts of the argument are optional.  The only constraint is that
+the argument must have at least a value or a list of nested arguments.
+Here are examples of arguments that you might pass to simple file utility:
+
+	Algorithm = Deflate  Src = fileIn  Dst = fileOut
+	Algorithm = Deflate  fileIn  fileOut
+	Algorithm = AES { Key = 1234 }  fileIn  fileOut
+	
+The common computer science structures can be easily expressed:
+
+	Array = { One Two Three }
+	Map   = { One = 1  Two = 2  Three = 3 }
+	
+Construction of object-oritented structures can be expressed as follows:
+
+	Content = Button { Text = "Hello world"  Size = {100, 20} }
+	
+The syntax can express the same data as XML:
+
+	XmlElement {
+		Arribute = "Value"
+		NestedElement { Text }
+	}
+
+=== Goals of the language ===
+
+"Simple data-centric alternative to XML suitable for configuration files"
+
+	Simple - The language should be as simple as possible.  It should be quick
+		to learn and simple to write parser for.
+	
+	Data-centric - The XML format is document-centric.  The original use was to
+		insert markup elements into a text document.  XHTML is a great example
+		of this.  Although it does the job quite well, XML was not designed for
+		the purpose of data storage.  This language focuses on data-storage
+		rather than document markup.
+		
+	Alternative to XML - The language should be viable alternative to XML in
+	    vast majority of data-centric applications.
+	
+	Suitable for configuration files - Configuration files are dully noted as
+		one of the possible applications of this language.  The language should
+		vaguely resemble configuration files in use today and it should
+		be possible to use it as command line syntax.
+	
+=== Syntax ===
+
+The formal syntax is:
+
+	Arguments ::= WS? (Comment | Argument) (WS (Comment | Argument))* WS? | WS?
+	Comment   ::= '#' [^\r\n]*
+	WS        ::= (' ' | '\t' | '\r' | '\n')+
+	String    ::= [^\r\n\t #'"{}=]+ | ("'" [^']* "'") | ('"' [^"]* '"')
+	Argument  ::= [String WS? '=' WS?] String? [WS? '{' Arguments '}']	
+	
+The argument must contain the value and/or the list of nested arguments.
+
+Strings are post-processed before they are passed to the user.  If the string
+is quoted, the quotes are removed.  Ampersands are resolved in both quoted and 
+unquoted strings in the same way as in XML.  In addition the default XML entity
+references, we also define &bk; as 0x0A, &tab; as 0x09 and &nbsp; as 0xA0.
+The "#x" prefix for Unicode references optional in this language.  This means &A;
+is valid reference.  The entity name should not be longer than 10 characters.
+
+=== Dicussion ===
+
+The syntax was inspired by the following languages or technologies:
+XML, JSON, XAML, C#, CSS, getopt
+
+JSON - Good alternative to XML.  It is basically data structure of nested arrays
+	and maps.  It is usually less verbose then XML, but in some cases it might
+	actually be more verbose because all strings have to be quoted.
+	The are parsers available for many languages.  It is suits your needs,
+	I recommend it.
+	
+XAML - XAML is format for storing GUI layout in XML.  It is often more verbose
+	then it needs to be and the authors of XAML have tried to solve the problem
+	using a few tricks.  For example, you can express an attribute as
+	Name = "{Binding Path=Source}".  Seeing this has motivated me to seek
+	a language that could express something like this natively.
+	
+C# - C# is able to express some object-constructing expressions quite
+	succinctly.  For example:  button = new Button("Hi") { FontSize = 12 };
+	The next version of C# will allow:  button = MakeButton("Hi", FontSize:12);
+
+
+Some design decissions:
+
+Escaping - XML style ampersands are used for escaping rather then backslash.
+	Backslashes will be frequently used as part of command line arguments
+	or in configuration files on Windows.  Making sure all file paths are
+	properly escaped using backslash would be major complication for the user.
+	If unesacaped ampersand will be present as part of the string, it will
+	result in parsing error since it will not be followed by semicolon.
+
+=== Alternative idea ===
+
+Take the following XML file for example:
+
+<Button Text="Hello world!">
+	<Location>
+		<Point X="20" Y="10"/>
+	</Location>
+</Button>
+
+Get rid of all attributes - they can expressed as elements:
+
+<Button>
+	<Text>"Hello world!"</Text>
+	<Location>
+		<Point>
+			<X>20</X>
+			<Y>10</Y>
+		</Point>
+	</Location>
+</Button>
+
+Modify the element syntax to use curly brackets:
+
+Button {
+	Text { "Hello world!" }
+	Location {
+		Point {
+			X { 20 }
+			Y { 10 }
+		}
+	}
 }
-XmlElement { Attribute = Value; Content... }
 
-== EBNF ==
+Introduce "Name = Value" as syntactic sugar for "Name { Value }": 
 
- (1) Content ::= (WhiteSpace | Comment | String | Object | KeyValuePair | ';'| ',')*
- (2) WhiteSpace ::= (' ' | '\t' | '\r' | '\n')+
- (3) Comment ::= '#' .* ('\r\n' | '\r' | '\n')
- (4) String ::= Char [(Char | ' ' | '\t')* Char] | QuotedString
- (5) Object ::= [String [WhiteSpace]] '{' Content '}'
- (6) KeyValuePair ::= String [WhiteSpace] '=' [WhiteSpace] (String | Object)
- (7) Char ::= . - ("'" | '"' | '{' | '}' | '=' | ';' | ',' | '#' | '\r' | '\n' | ' ' | '\t')
- (8) QuotedString ::= "'" ("\\'" | "''" | . - "'")* "'" | '"' ('\\"' | '""' | . - '"')* '"'
+Button {
+	Text = "Hello world!"
+	Location = Point { X = 20 Y = 10 }
+}
 
-  "Name { }" is named object, not string followed by annonymous object.
-
-== Resolution of quoted strings ==
-
-
-
-== Discussion ==
-
- Design goals:
-   - As expressive as XML, but less verbose
-   - Reusing concepts from current formats (ie. familiar/intuitive to use)
-   - Minimalistic
-   - Very easy to write a parser
- 
- Name
-   Concise Object Notation Format?
-   
- TODO:
-   "abc"123
- 
+Done
