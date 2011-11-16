@@ -65,23 +65,11 @@ Done
 		be possible to use it as command line syntax.
 	
 === Syntax ===
-
-The formal syntax is:
-
-   Comment  ::= '#' [^\r\n]*
-   WS       ::= (' ' | '\t' | '\r' | '\n')+
-   String   ::= [^\r\n\t #'"{}=]+ | ("'" [^']* "'") | ('"' [^"]* '"')
-   Node     ::= String [WS? '{' Children '}' | WS? '=' WS? Node]
-   Children ::= WS? (Comment | Node) (WS (Comment | Node))* WS? | WS?
-	
-The argument must contain the value and/or the list of nested arguments.
-
-Strings are post-processed before they are passed to the user.  If the string
-is quoted, the quotes are removed.  Ampersands are resolved in both quoted and 
-unquoted strings in the same way as in XML.  In addition the default XML entity
-references, we also define &bk; as 0x0A, &tab; as 0x09 and &nbsp; as 0xA0.
-The "#x" prefix for Unicode references optional in this language.  This means &A;
-is valid reference.  The entity name should not be longer than 10 characters.
+   
+   WS       ::= (' ' | '\t' | '\r' | '\n' | '#' [^\r\n]*)*
+   String   ::= '"' ([^"] | '""')* '"' | "'" ([^'] | "''")* "'" | [^ \r\n\t#={}'"]+
+   Node     ::= String? [WS? '{' Children '}' | WS? '=' WS? Node]
+   Document ::= WS? (Node WS?)*
 
 === Dicussion ===
 
@@ -103,13 +91,3 @@ XAML - XAML is format for storing GUI layout in XML.  It is often more verbose
 C# - C# is able to express some object-constructing expressions quite
 	succinctly.  For example:  button = new Button("Hi") { FontSize = 12 };
 	The next version of C# will allow:  button = MakeButton("Hi", FontSize:12);
-
-
-Some design decissions:
-
-Escaping - XML style ampersands are used for escaping rather then backslash.
-	Backslashes will be frequently used as part of command line arguments
-	or in configuration files on Windows.  Making sure all file paths are
-	properly escaped using backslash would be major complication for the user.
-	If unesacaped ampersand will be present as part of the string, it will
-	result in parsing error since it will not be followed by semicolon.

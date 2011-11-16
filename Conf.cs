@@ -1,341 +1,258 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Text;
 
 namespace Conf
 {
-	public class Node
-	{
-		public string     Value    { get; set; }
-		public List<Node> Children { get; set; }
-	}
+    public class Node
+    {
+        public string     Value    { get; set; }
+        public List<Node> Children { get; set; }
+    }
 
-	/// <summary>
-	/// 
-	/// </summary>
-	/// <remarks>
-	///  Syntax:
-	///    Comment  ::= '#' [^\r\n]*
-	///    WS       ::= (' ' | '\t' | '\r' | '\n')+
-	///    String   ::= [^\r\n\t #'"{}=]+ | ("'" [^']* "'") | ('"' [^"]* '"')
-	///    Node     ::= String [WS? '{' Children '}' | WS? '=' WS? Node]
-	///    Children ::= WS? (Comment | Node) (WS (Comment | Node))* WS? | WS?
-	/// </remarks>
-	public class Parser
-	{
-		string input;
-		int curr;
-		int end;
+    /// <remarks>
+    /// WS       ::= (' ' | '\t' | '\r' | '\n' | '#' [^\r\n]*)*
+    /// String   ::= '"' ([^"] | '""')* '"' | "'" ([^'] | "''")* "'" | [^ \r\n\t#={}'"]+
+    /// Node     ::= String? [WS? '{' Children '}' | WS? '=' WS? Node]
+    /// Document ::= WS? (Node WS?)*
+    /// </remarks>
+    public class Parser
+    {
+        string input;
+        int curr;
+        int end;
+        int endOfLastString;
 
-		Parser(string input, int start, int count)
-		{
-			this.input = input;
-			this.curr = start;
-			this.end = start + count;
-		}
+        Parser(string input)
+        {
+            this.input = input;
+            this.curr = 0;
+            this.end = input.Length;
+            this.endOfLastString = -1;
+        }
 
-		public static List<Node> Parse(string text)
-		{
-			return new Parser(text, 0, text.Length).ReadChildren(false);
-		}
+        public static List<Node> Parse(string input)
+        {
+            return new Parser(input).ReadDocument();
+        }
 
-		public static List<Node> Parse(string text, int start, int count)
-		{
-			return new Parser(text, start, count).ReadChildren(false);
-		}
+        /// <remarks> WS ::= (' ' | '\t' | '\r' | '\n' | '#' [^\r\n]*)* </remarks>
+        void ReadWhiteSpace()
+        {
+            while (curr < end) {
+                switch(input[curr]) {
+                    case ' ':
+                    case '\t':
+                    case '\r':
+                    case '\n':
+                        curr++; // Whitespace
+                        break;
+                    case '#':
+                        curr++; // Comment
+                        while (curr < end && input[curr] != '\r' && input[curr] != '\n') curr++;
+                        break;
+                    default:
+                        return;
+                }
+            }
+        }
 
-		public static List<Node> ParseCommandLine()
-		{
-			string commandLine = Environment.CommandLine;
-			Parser parser = new Parser(commandLine, 0, commandLine.Length);
-			string arg0;
-			parser.TryReadString(out arg0); // Skip the name of the executable
-			return parser.ReadChildren(false);
-		}
+        /// <remarks> String ::= '"' ([^"] | '""')* '"' | "'" ([^'] | "''")* "'" | [^ \r\n\t#={}'"]+ </remarks>
+        string ReadString()
+        {
+            if (curr == end)
+                throw new ParseException(curr, curr, "String expected");
+            int start = curr;
+            char quote = input[curr];
+            if (quote == '"' || quote == '\'') {
+                // Quoted string
+                do {
+                    curr++; // Quote
+                    while (curr < end && input[curr] != quote) curr++;
+                    if (curr == end)
+                        throw new ParseException(start, end, "Closing quote is missing");
+                    curr++; // Quote
+                } while (curr < end && input[curr] == quote); // Double-quote - continue
+                return input.Substring(start + 1, curr - start - 2).Replace(quote.ToString() + quote.ToString(), quote.ToString());
+            } else {
+                // Unquoted string
+                while (curr < end) {
+                    switch(input[curr]) {
+                        case ' ': case '\r': case '\n': case '\t': case '#': case '=': case '{': case '}': case '\'': case '"':
+                            if (curr == start)
+                                throw new ParseException(curr, curr, "String expected");
+                            return input.Substring(start, curr - start); // End of string
+                    }
+                    curr++;
+                }
+                return input.Substring(start, curr - start); // End of input
+            }
+        }
 
-		List<Node> ReadChildren(bool nested)
-		{
-			List<Node> children = new List<Node>();
+        /// <remarks> String? [WS? '{' Children '}' | WS? '=' WS? Node] </remarks>
+        Node ReadNode()
+        {
+            Node node = new Node();
+            // Read the node value (optional)
+            if (curr < end && input[curr] == '{') {
+                node.Value = string.Empty;
+            } else {
+                if (curr == endOfLastString)
+                    throw new ParseException(curr, curr, "Two consecutive strings have to be separated by whitespace.");
+                node.Value = ReadString();
+                endOfLastString = curr;
+                ReadWhiteSpace();
+            }
+            // Read the children (optional)
+            if (curr < end && input[curr] == '=') {
+                curr++; // '='
+                ReadWhiteSpace();
+                node.Children = new List<Node>(1);
+                node.Children.Add(ReadNode());
+            } else if (curr < end && input[curr] == '{') {
+                curr++; // '{'
+                node.Children = new List<Node>();
+                ReadWhiteSpace();
+                while (curr < end && input[curr] != '}') {
+                    node.Children.Add(ReadNode());
+                    ReadWhiteSpace();
+                }
+                if (!(curr < end && input[curr] == '}'))
+                    throw new ParseException(curr, curr, "'}' Expected");
+                curr++; // '}'
+            }
+            return node;
+        }
 
-			TryReadWhiteSpace();
+        /// <remarks> Document ::= WS? (Node WS?)* </remarks>
+        List<Node> ReadDocument()
+        {
+            List<Node> nodes = new List<Node>();
+            ReadWhiteSpace();
+            while (curr < end) {
+                nodes.Add(ReadNode());
+                ReadWhiteSpace();
+            }
+            return nodes;
+        }
+    }
 
-			while (curr < end) {
-				// End of nested children
-				if (input[curr] == '}') {
-					if (nested) {
-						break;
-					} else {
-						throw new ParseException(curr, curr, "Superfluous '}'");
-					}
-				}
+    public class ParseException : Exception
+    {
+        public int Start { get; private set; }
+        public int End { get; private set; }
 
-				// Try to parse a comment
-				if (TryReadComment()) {
-					TryReadWhiteSpace();
-				} else {
-					// If it is not a comment, it must be a node
-					bool followedByWhiteSpace;
-					children.Add(ReadNode(out followedByWhiteSpace));
+        public ParseException(int start, int end, string message) : base(message)
+        {
+            this.Start = start;
+            this.End = end;
+        }
+    }
 
-					// The node has to be followed by whitespace or end of file or '}'
-					if (!followedByWhiteSpace && curr < end && input[curr] != '}') {
-						throw new ParseException(curr, curr, "Node has to be followed by whitespace");
-					}
-				}
-			}
-			return children;
-		}
+    public class PrettyPrinter
+    {
+        StringBuilder sb = new StringBuilder();
+        int depth = 0;
 
-		Node ReadNode(out bool followedByWhiteSpace)
-		{
-			string value;
-			if (!TryReadString(out value))
-				throw new ParseException(curr, curr, "String value expected");
+        public static string Print(IEnumerable<Node> nodes)
+        {
+            PrettyPrinter pp = new PrettyPrinter();
+            pp.Append(nodes);
+            return pp.sb.ToString();
+        }
 
-			Node node = new Node();
-			node.Value = value;
-			followedByWhiteSpace = TryReadWhiteSpace();
-			if (curr < end && input[curr] == '=') {
-				curr++; // '='
-				TryReadWhiteSpace();
-				node.Children = new List<Node>(1);
-				node.Children.Add(ReadNode(out followedByWhiteSpace));
-			} else if (curr < end && input[curr] == '{') {
-				curr++; // '{'
-				node.Children = ReadChildren(true);
-				if (curr == end || input[curr] != '}')
-					throw new ParseException(curr, curr, "'}' Expected");
-				curr++; // '}'
-				followedByWhiteSpace = TryReadWhiteSpace();
-			}
-			return node;
-		}
+        void Append(IEnumerable<Node> nodes)
+        {
+            foreach (Node node in nodes) {
+                // Delimiter
+                if (sb.Length > 0) {
+                    sb.Append('\n');
+                    sb.Append(' ', depth * 2);
+                }
+                if (node.Children == null || node.Children.Count == 0) {
+                    sb.Append(Escape(node.Value));
+                } else if (node.Children.Count == 1 && (node.Children[0].Children == null || node.Children[0].Children.Count == 0) && !string.IsNullOrEmpty(node.Value)) {
+                    sb.Append(Escape(node.Value));
+                    sb.Append(" = ");
+                    sb.Append(Escape(node.Children[0].Value));
+                } else {
+                    if (!string.IsNullOrEmpty(node.Value)) {
+                        sb.Append(Escape(node.Value));
+                        sb.Append(' ');
+                    }
+                    sb.Append('{');
+                    depth++;
+                    Append(node.Children);
+                    depth--;
+                    sb.Append('\n');
+                    sb.Append(' ', depth * 2);
+                    sb.Append('}');
+                }
+            }
+        }
 
-		bool TryReadWhiteSpace()
-		{
-			int start = curr;
-			while (curr < end && ((input[curr] <= ' ') && (input[curr] == ' ' || input[curr] == '\t' || input[curr] == '\r' || input[curr] == '\n'))) curr++;
-			return curr > start;
-		}
+        public static string Escape(string val)
+        {
+            if (string.IsNullOrEmpty(val)) {
+                return "\"\"";
+            } else if (val.IndexOfAny(new char[] { '\r', '\n', '\t', ' ', '#', '\'', '"', '{', '}', '=' }) == -1) {
+                return val;
+            } else {
+                if (!val.Contains("\"") || val.Contains("\'")) {
+                    return "\"" + val.Replace("\"", "\"\"") + "\"";
+                } else {
+                    return "\'" + val + "\'";
+                }
+            }
+        }
+    }
 
-		bool TryReadComment()
-		{
-			if (curr < end && input[curr] == '#') {
-				curr++; // '#'
-				while (curr < end && input[curr] != '\r' && input[curr] != '\n') curr++;
-				return true;
-			} else {
-				return false;
-			}
-		}
+    public static class Deserializer
+    {
+        public static void LoadAppConfig<T>()
+        {
+            // Set properties from .conf file
+            string assembyPath = Assembly.GetEntryAssembly().Location;
+            string confPath = Path.Combine(Path.GetDirectoryName(assembyPath), Path.GetFileNameWithoutExtension(assembyPath) + ".conf");
+            if (File.Exists(confPath)) {
+                Deserialize(Parser.Parse(File.ReadAllText(confPath)), default(T));
+            }
 
-		bool TryReadString(out string str)
-		{
-			if (curr == end) {
-				str = string.Empty;
-				return false;
-			}
+            // Set properties from command line
+            List<Node> args = Parser.Parse(Environment.CommandLine);
+            args.RemoveAt(0); // Skip the name of the executable
+            Deserialize(args, default(T));
+        }
 
-			int start = curr;
-			char first = input[curr];
-			if (first == '"' || first == '\'') {
-				// Quoted string
-				curr++;
-				int endQuote;
-				if (curr == end || (endQuote = input.IndexOf(first, curr)) == -1)
-					throw new ParseException(start, end, "Closing quote is missing");
-				curr = endQuote + 1;
-				str = ReslveReferences(start + 1, endQuote);
-				return true;
-			} else {
-				// Unquoted string
-				while (curr < end) {
-					char c = input[curr];
-					if (('A' <= c && c <= 'z') || ('0' <= c && c <= '9') || c > 0x80) {
-						curr++; // Quick pass test for the most common characters
-					} else {
-						if (c == ' ' || c == '=' || c == '\r' || c == '\n' || c == '\t' || c == '{' || c == '}' || c == '#' || c == '\'' || c == '"')
-							break;  // String terminator
-						curr++; // Less common characters
-					}
-				}
-				str = ReslveReferences(start, curr);
-				return curr > start;
-			}
-		}
-
-		string ReslveReferences(int start, int end)
-		{
-			if (start == end)
-				return string.Empty;
-
-			if (input.IndexOf('&', start, end - start) == -1)
-				return input.Substring(start, end - start);
-
-			StringBuilder sb = new StringBuilder(end - start);
-			int pos = start;
-			while (pos < end) {
-				int amp = input.IndexOf('&', pos, end - pos);
-				if (amp == -1) {
-					sb.Append(input, pos, end - pos);
-					break;
-				} else {
-					sb.Append(input, pos, amp - pos);
-					int semicolon = input.IndexOf(';', amp, end - amp);
-					if (semicolon == -1)
-						throw new ParseException(amp, end, "';' is missing after '&'");
-					string refName = input.Substring(amp + 1, semicolon - amp - 1);
-					switch (refName) {
-						case "": throw new ParseException(amp, amp + 2, "Empty reference");
-						case "amp":  sb.Append('&'); break;
-						case "apos": sb.Append('\''); break;
-						case "quot": sb.Append('\"'); break;
-						case "lt":   sb.Append('<'); break;
-						case "gt":   sb.Append('>'); break;
-						case "lb":   sb.Append('{'); break;
-						case "rb":   sb.Append('}'); break;
-						case "eq":   sb.Append('='); break;
-						case "br":   sb.Append('\n'); break;
-						case "cr":   sb.Append('\r'); break;
-						case "tab":  sb.Append('\t'); break;
-						case "nbsp": sb.Append((char)0xA0); break;
-						default:
-							// Unicode character
-							int utf32;
-							try {
-								if (refName.StartsWith("#x")) {
-									utf32 = int.Parse(refName.Substring(2), NumberStyles.AllowHexSpecifier);
-								} else if (refName[0] == '#') {
-									utf32 = int.Parse(refName.Substring(1), NumberStyles.None);
-								} else {
-									utf32 = int.Parse(refName, NumberStyles.AllowHexSpecifier);
-								}
-							} catch {
-								throw new ParseException(amp + 1, semicolon, "Failed to parse reference '" + refName + "'");
-							}
-							try {
-								sb.Append(char.ConvertFromUtf32(utf32));
-							} catch {
-								throw new ParseException(amp + 1, semicolon, "Invalid Unicode code point " + refName);
-							}
-							break;
-					}
-					pos = semicolon + 1;
-				}
-			}
-			return sb.ToString();
-		}
-	}
-
-	public class ParseException : Exception
-	{
-		public int Start { get; private set; }
-		public int End { get; private set; }
-
-		public ParseException(int start, int end, string message)
-			: base(message)
-		{
-			this.Start = start;
-			this.End = end;
-		}
-	}
-
-	public class PrettyPrinter
-	{
-		StringBuilder sb;
-		int depth = 0;
-
-		public string Print(IEnumerable<Node> nodes)
-		{
-			sb = new StringBuilder();
-			Append(nodes);
-			return sb.ToString();
-		}
-
-		void Append(IEnumerable<Node> nodes)
-		{
-			foreach (Node node in nodes) {
-				// Delimiter
-				if (sb.Length > 0) {
-					sb.Append("\n");
-					sb.Append(' ', depth * 2);
-				}
-				// The value
-				Append(node.Value);
-				// Children
-				if (node.Children != null && node.Children.Count > 0) {
-					if (node.Children.Count == 1 && (node.Children[0].Children == null || node.Children[0].Children.Count == 0)) {
-						sb.Append(" =");
-						Append(node.Children[0].Value);
-					} else {
-						sb.Append(" {");
-						depth++;
-						Append(node.Children);
-						depth--;
-						sb.Append("\n");
-						sb.Append(' ', depth * 2);
-						sb.Append("}");
-					}
-				}
-			}
-		}
-
-		void Append(string val)
-		{
-			if (string.IsNullOrEmpty(val)) {
-				sb.Append("\"\"");
-			} else if (val.IndexOfAny(new char[] { '\r', '\n', '\t', ' ', '#', '\'', '"', '{', '}', '=' }) == -1) {
-				sb.Append(val);
-			} else {
-				if (val.Contains('"') && !val.Contains('\'')) {
-					sb.Append('\'');
-					sb.Append(val);
-					sb.Append('\'');
-				} else {
-					sb.Append('\"');
-					sb.Append(val.Replace("\"", "&quot;"));
-					sb.Append('\"');
-				}
-			}
-		}
-	}
-
-	public static class Deserializer
-	{
-		public static void LoadAppConfig<T>()
-		{
-			// Set properties from the .conf file
-			string assembyPath = Assembly.GetEntryAssembly().Location;
-			string confPath = Path.Combine(Path.GetDirectoryName(assembyPath), Path.GetFileNameWithoutExtension(assembyPath) + ".conf");
-			if (File.Exists(confPath)) {
-				string confText = File.ReadAllText(confPath);
-				Deserialize(Parser.Parse(confText), default(T));
-			}
-
-			// Set properties from command line
-			Deserialize(Parser.ParseCommandLine(), default(T));
-		}
-
-		public static void Deserialize<T>(List<Node> from, T to)
-		{
-			foreach (Node node in from) {
-				FieldInfo field = typeof(T).GetField(node.Value, BindingFlags.Public | BindingFlags.Static);
-				if (field != null) {
-					if (field.FieldType == typeof(TimeSpan)) {
-						TimeSpan val;
-						TimeSpan.TryParse(node.Children[0].Value, out val);
-						field.SetValue(null, val);
-					} else {
-						object val = Convert.ChangeType(node.Children[0].Value, field.FieldType);
-						field.SetValue(null, val);
-					}
-				}
-			}
-		}
-	}
+        public static void Deserialize<T>(List<Node> from, T to)
+        {
+            foreach (Node node in from) {
+                string name = node.Value.TrimStart('-');
+                FieldInfo field = typeof(T).GetField(name, BindingFlags.Public | BindingFlags.Static);
+                if (field != null) {
+                    if (field.FieldType == typeof(TimeSpan)) {
+                        TimeSpan val;
+                        TimeSpan.TryParse(node.Children[0].Value, out val);
+                        field.SetValue(null, val);
+                    } else if (field.FieldType == typeof(bool) && (node.Children == null || node.Children.Count == 0)) {
+                        field.SetValue(null, true);
+                    } else {
+                        object val = Convert.ChangeType(node.Children[0].Value, field.FieldType);
+                        field.SetValue(null, val);
+                    }
+                } else {
+                    StringBuilder sb = new StringBuilder();
+                    foreach(FieldInfo fi in typeof(T).GetFields(BindingFlags.Public | BindingFlags.Static)) {
+                        sb.Append(fi.Name);
+                        sb.Append(" ");
+                    }
+                    throw new Exception("Unknown option: " + name + Environment.NewLine + "Valid options: " + sb.ToString());
+                }
+            }
+        }
+    }
 }
